@@ -21,6 +21,7 @@ data/output/**
 !data/output/quotas_SISU_both_editions_univ_year.dta
 !data/output/quotas_Sup_Census_univ_year.dta
 !data/output/BR_RG_Imediatas_2024_simplified.rds
+!data/output/cutoffs_SISU_univ_major_aa_year.dta
 
 # Local output folders can be regenerated
 results/

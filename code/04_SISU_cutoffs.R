@@ -406,7 +406,7 @@ write_dta(cutoff_df, file.path(output_dir, "cutoffs_SISU.dta"))
 # Aggregating cutoffs by year, university, major and quota classification
 cutoff_turn_level <- cutoff_df %>%
   filter(DS_GRAU == "Bacharelado") %>%
-  group_by(year, co_ies, Major, Classification, DS_TURNO) %>%
+  group_by(year, co_ies, micro_reg_code, Major, Classification, DS_TURNO) %>%
   summarise(
     Cutoff_Score_Turno = weighted_mean_or_na(NU_NOTACORTE, QT_VAGAS_CONCORRENCIA),
     Seats_Total_Turno = sum_or_na(QT_VAGAS_CONCORRENCIA),
@@ -415,7 +415,7 @@ cutoff_turn_level <- cutoff_df %>%
   )
 
 cutoff_univ_major_aa <- cutoff_turn_level %>%
-  group_by(year, co_ies, Major, Classification) %>%
+  group_by(year, co_ies, micro_reg_code, Major, Classification) %>%
   summarise(
     Cutoff_Score = weighted_mean_or_na(Cutoff_Score_Turno, Seats_Total_Turno),
     Seats_Total = sum_or_na(Seats_Total_Turno),
@@ -426,7 +426,7 @@ cutoff_univ_major_aa <- cutoff_turn_level %>%
 
 quota_seats_univ_major_aa <- cutoff_df %>%
   filter(DS_GRAU == "Bacharelado") %>%
-  group_by(year, co_ies, Major, Classification) %>%
+  group_by(year, co_ies, micro_reg_code, Major, Classification) %>%
   summarise(
     Seats_AA = sum(QT_VAGAS_CONCORRENCIA * Affirmative_Action, na.rm = TRUE),
     Seats_Not_reserved = sum(QT_VAGAS_CONCORRENCIA * Not_reserved, na.rm = TRUE),
@@ -439,7 +439,7 @@ quota_seats_univ_major_aa <- cutoff_df %>%
   )
 
 cutoff_univ_major_aa <- cutoff_univ_major_aa %>%
-  left_join(quota_seats_univ_major_aa, by = c("year", "co_ies", "Major", "Classification")) %>%
+  left_join(quota_seats_univ_major_aa, by = c("year", "co_ies", "micro_reg_code", "Major", "Classification")) %>%
   mutate(
     Seats_Not_reserved = if_else(Classification == "No Reserved", Seats_Total, Seats_Not_reserved),
     Share_Seats_AA = Seats_AA / Seats_Total,
@@ -450,6 +450,6 @@ cutoff_univ_major_aa <- cutoff_univ_major_aa %>%
     Share_Seats_Disability = Seats_Disability / Seats_Total,
     Share_Seats_Others = Seats_Others / Seats_Total
   ) %>%
-  arrange(co_ies, Major, Classification, year)
+  arrange(co_ies, micro_reg_code, Major, Classification, year)
 
 write_dta(cutoff_univ_major_aa, file.path(output_dir, "cutoffs_SISU_univ_major_aa_year.dta"))

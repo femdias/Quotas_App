@@ -11,6 +11,7 @@ shapefile_path <- file.path(
   "data/raw/IBGE/BR_RG_Imediatas_2024/BR_RG_Imediatas_2024.shp"
 )
 simplified_map_path <- file.path(output_dir, "BR_RG_Imediatas_2024_simplified.rds")
+cutoff_file <- file.path(output_dir, "cutoffs_SISU_univ_major_aa_year.dta")
 
 dataset_specs <- tibble::tribble(
   ~dataset_id, ~dataset_label, ~file_name, ~org_var, ~title_label,
@@ -128,7 +129,7 @@ microregion_panel <- function(df, share_var) {
     arrange(micro_reg_code, year)
 }
 
-average_share_by_organization <- function(df, share_var) {
+average_share_by_organization <- function(df, share_var, weighted = FALSE) {
   numerator_var <- share_numerator(share_var)
 
   microregion_org_panel <- df %>%
@@ -144,10 +145,14 @@ average_share_by_organization <- function(df, share_var) {
     group_by(org_id) %>%
     summarize(n_microregions = n_distinct(micro_reg_code), .groups = "drop")
 
-  microregion_org_panel %>%
+  org_average <- microregion_org_panel %>%
     group_by(org_id, year) %>%
     summarize(
-      Mean_Share_Selected = mean(Share_Selected, na.rm = TRUE),
+      Mean_Share_Selected = if (weighted) {
+        sum(Seats_Selected, na.rm = TRUE) / sum(Seats_Total, na.rm = TRUE)
+      } else {
+        mean(Share_Selected, na.rm = TRUE)
+      },
       .groups = "drop"
     ) %>%
     left_join(org_counts, by = "org_id") %>%
@@ -160,6 +165,96 @@ average_share_by_organization <- function(df, share_var) {
       )
     ) %>%
     arrange(org_id, year)
+
+  if (n_distinct(microregion_org_panel$org_id) <= 1) {
+    return(org_average)
+  }
+
+  overall_panel <- df %>%
+    group_by(micro_reg_code, year) %>%
+    summarize(
+      Seats_Total = sum(Seats_Total, na.rm = TRUE),
+      Seats_Selected = sum(.data[[numerator_var]], na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(Share_Selected = if_else(Seats_Total > 0, Seats_Selected / Seats_Total, 0))
+
+  overall_n_microregions <- n_distinct(overall_panel$micro_reg_code)
+
+  overall_average <- overall_panel %>%
+    group_by(year) %>%
+    summarize(
+      Mean_Share_Selected = if (weighted) {
+        sum(Seats_Selected, na.rm = TRUE) / sum(Seats_Total, na.rm = TRUE)
+      } else {
+        mean(Share_Selected, na.rm = TRUE)
+      },
+      .groups = "drop"
+    ) %>%
+    mutate(
+      org_id = "Overall",
+      n_microregions = overall_n_microregions,
+      org_label = paste0("Overall (n = ", overall_n_microregions, ")")
+    )
+
+  bind_rows(org_average, overall_average) %>%
+    arrange(org_id, year)
+}
+
+load_cutoff_dataset <- function() {
+  read_dta(cutoff_file) %>%
+    mutate(
+      year = as.integer(year),
+      co_ies = as.character(as.integer(co_ies)),
+      Major = as.character(Major),
+      Classification = as.character(Classification),
+      Cutoff_Score = as.numeric(Cutoff_Score),
+      Seats_Total = as.numeric(Seats_Total)
+    )
+}
+
+cutoff_co_ies_choices <- function(df) {
+  co_ies_values <- as.character(sort(as.integer(unique(df$co_ies))))
+  c("All" = "All", stats::setNames(co_ies_values, co_ies_values))
+}
+
+cutoff_major_choices <- function(df) {
+  majors <- sort(unique(df$Major))
+  c("All" = "All", stats::setNames(majors, majors))
+}
+
+cutoff_classification_choices <- function(df) {
+  classifications <- sort(unique(df$Classification))
+  stats::setNames(classifications, classifications)
+}
+
+default_cutoff_classifications <- c(
+  "Low-income",
+  "No Reserved",
+  "Public School",
+  "Public School low-income",
+  "Public School non-white",
+  "Non-white",
+  "Non-white low-income",
+  "Public School non-white low-income"
+)
+
+aggregate_cutoffs <- function(df, weighted = FALSE) {
+  df %>%
+    group_by(Classification, year) %>%
+    summarize(
+      Cutoff_Score = if (weighted) {
+        if (sum(Seats_Total, na.rm = TRUE) > 0) {
+          weighted.mean(Cutoff_Score, w = Seats_Total, na.rm = TRUE)
+        } else {
+          mean(Cutoff_Score, na.rm = TRUE)
+        }
+      } else {
+        mean(Cutoff_Score, na.rm = TRUE)
+      },
+      .groups = "drop"
+    ) %>%
+    arrange(Classification, year)
 }
 
 prepare_treatment_panel <- function(df, share_var) {
@@ -209,45 +304,77 @@ if (file.exists(simplified_map_path)) {
   saveRDS(regions_sf_map, simplified_map_path)
 }
 
-ui <- fluidPage(
-  titlePanel("AA Quotas Explorer"),
-  sidebarLayout(
-    sidebarPanel(
-      selectInput(
-        "dataset",
-        "Dataset",
-        choices = stats::setNames(dataset_specs$dataset_id, dataset_specs$dataset_label),
-        selectize = FALSE
+ui <- navbarPage(
+  "AA Quotas Explorer",
+  tabPanel(
+    "Quotas",
+    sidebarLayout(
+      sidebarPanel(
+        selectInput(
+          "dataset",
+          "Dataset",
+          choices = stats::setNames(dataset_specs$dataset_id, dataset_specs$dataset_label),
+          selectize = FALSE
+        ),
+        selectInput(
+          "organization",
+          "Academic organization",
+          choices = NULL,
+          multiple = TRUE,
+          selectize = FALSE
+        ),
+        selectInput(
+          "admin_category",
+          "Administrative category",
+          choices = NULL,
+          multiple = TRUE,
+          selectize = FALSE
+        ),
+        selectInput(
+          "share_var",
+          "Share of affirmative action",
+          choices = share_specs,
+          selected = "Share_Seats_AA",
+          selectize = FALSE
+        ),
+        checkboxInput("weighted_average", "Seats-weighted average", value = FALSE),
+        selectInput("map_year", "Map year", choices = NULL, selectize = FALSE)
       ),
-      selectInput(
-        "organization",
-        "Academic organization",
-        choices = NULL,
-        multiple = TRUE,
-        selectize = FALSE
+      mainPanel(
+        tabsetPanel(
+          tabPanel("Share of AA seats", plotOutput("share_plot", height = "720px")),
+          tabPanel("Average by organization", plotOutput("average_share_plot", height = "640px")),
+          tabPanel("Treatment status", plotOutput("treatment_plot", height = "720px")),
+          tabPanel("Map", plotOutput("map_plot", height = "760px"))
+        )
+      )
+    )
+  ),
+  tabPanel(
+    "SISU cutoffs",
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("cutoff_co_ies", "Organization code (co_ies)", choices = NULL, selectize = FALSE),
+        selectInput(
+          "cutoff_major",
+          "Major",
+          choices = NULL,
+          selectize = FALSE
+        ),
+        selectizeInput(
+          "cutoff_classification",
+          "Quota type",
+          choices = NULL,
+          multiple = TRUE,
+          options = list(
+            plugins = list("remove_button"),
+            placeholder = "Select one or more quota types"
+          )
+        ),
+        checkboxInput("cutoff_weighted", "Seats-weighted average", value = FALSE)
       ),
-      selectInput(
-        "admin_category",
-        "Administrative category",
-        choices = NULL,
-        multiple = TRUE,
-        selectize = FALSE
-      ),
-      selectInput(
-        "share_var",
-        "Share of affirmative action",
-        choices = share_specs,
-        selected = "Share_Seats_AA",
-        selectize = FALSE
-      ),
-      selectInput("map_year", "Map year", choices = NULL, selectize = FALSE)
-    ),
-    mainPanel(
-      tabsetPanel(
-        tabPanel("Share of AA seats", plotOutput("share_plot", height = "720px")),
-        tabPanel("Average by organization", plotOutput("average_share_plot", height = "640px")),
-        tabPanel("Treatment status", plotOutput("treatment_plot", height = "720px")),
-        tabPanel("Map", plotOutput("map_plot", height = "760px"))
+      mainPanel(
+        plotOutput("cutoff_time_plot", height = "700px")
       )
     )
   )
@@ -311,6 +438,59 @@ server <- function(input, output, session) {
     paste(org_display_label(input$organization), collapse = ", ")
   })
 
+  cutoff_data <- reactive({
+    load_cutoff_dataset()
+  })
+
+  observeEvent(cutoff_data(), {
+    cutoff_df <- cutoff_data()
+
+    updateSelectInput(
+      session,
+      "cutoff_co_ies",
+      choices = cutoff_co_ies_choices(cutoff_df),
+      selected = "All"
+    )
+
+    major_choices <- cutoff_major_choices(cutoff_df)
+    updateSelectInput(
+      session,
+      "cutoff_major",
+      choices = major_choices,
+      selected = "All"
+    )
+
+    classification_choices <- cutoff_classification_choices(cutoff_df)
+    selected_classifications <- default_cutoff_classifications[
+      default_cutoff_classifications %in% unname(classification_choices)
+    ]
+
+    updateSelectizeInput(
+      session,
+      "cutoff_classification",
+      choices = classification_choices,
+      selected = selected_classifications,
+      server = TRUE
+    )
+  }, ignoreInit = FALSE)
+
+  selected_cutoff_data <- reactive({
+    req(input$cutoff_co_ies, input$cutoff_major, input$cutoff_classification)
+
+    df <- cutoff_data() %>%
+      filter(.data$Classification %in% input$cutoff_classification)
+
+    if (input$cutoff_co_ies != "All") {
+      df <- df %>% filter(.data$co_ies == input$cutoff_co_ies)
+    }
+
+    if (input$cutoff_major != "All") {
+      df <- df %>% filter(.data$Major == input$cutoff_major)
+    }
+
+    df
+  })
+
   output$share_plot <- renderPlot({
     req(input$share_var)
     panel_df <- microregion_panel(selected_data(), input$share_var)
@@ -338,7 +518,11 @@ server <- function(input, output, session) {
   output$average_share_plot <- renderPlot({
     req(input$share_var)
 
-    average_df <- average_share_by_organization(selected_data(), input$share_var)
+    average_df <- average_share_by_organization(
+      selected_data(),
+      input$share_var,
+      weighted = isTRUE(input$weighted_average)
+    )
     req(nrow(average_df) > 0)
 
     ggplot(
@@ -347,13 +531,19 @@ server <- function(input, output, session) {
     ) +
       geom_line(linewidth = 1) +
       geom_point(size = 1.8) +
+      scale_color_manual(
+        values = setNames(
+          if_else(str_detect(unique(average_df$org_label), "^Overall "), "black", scales::hue_pal()(length(unique(average_df$org_label)))),
+          unique(average_df$org_label)
+        )
+      ) +
       scale_y_continuous(
         limits = c(0, 1),
         labels = scales::percent_format(accuracy = 1)
       ) +
       labs(
         title = paste0(
-          "Average ",
+          if (isTRUE(input$weighted_average)) "Seats-weighted average " else "Average ",
           input$share_var,
           " across microregions: ",
           selected_spec()$title_label
@@ -361,6 +551,38 @@ server <- function(input, output, session) {
         x = "Year",
         y = paste0("Average ", input$share_var),
         color = "Academic organization"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        legend.position = "bottom",
+        plot.title = element_text(size = 16, hjust = 0.5)
+      )
+  })
+
+  output$cutoff_time_plot <- renderPlot({
+    cutoff_df <- selected_cutoff_data()
+    req(nrow(cutoff_df) > 0)
+
+    plot_df <- aggregate_cutoffs(
+      cutoff_df,
+      weighted = isTRUE(input$cutoff_weighted)
+    )
+    req(nrow(plot_df) > 0)
+
+    ggplot(
+      plot_df,
+      aes(x = year, y = Cutoff_Score, color = Classification, group = Classification)
+    ) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 1.8) +
+      labs(
+        title = paste0(
+          if (isTRUE(input$cutoff_weighted)) "Seats-weighted average cutoff scores" else "Average cutoff scores",
+          if (input$cutoff_co_ies == "All") ": all organizations" else paste0(": co_ies ", input$cutoff_co_ies)
+        ),
+        x = "Year",
+        y = "Cutoff score",
+        color = "Quota type"
       ) +
       theme_minimal(base_size = 13) +
       theme(
