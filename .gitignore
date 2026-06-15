@@ -1,0 +1,30 @@
+# R session and local artifacts
+.Rhistory
+.RData
+.Ruserdata
+Rplots.pdf
+*.log
+
+# Posit/RStudio project-local files
+.Rproj.user/
+.positron/
+
+# Keep raw and generated data out of Git by default
+data/raw/**
+data/intermediate/**
+data/output/**
+
+# App deployment data only
+!data/
+!data/output/
+!data/output/quotas_SISU_univ_year.dta
+!data/output/quotas_SISU_both_editions_univ_year.dta
+!data/output/quotas_Sup_Census_univ_year.dta
+!data/output/BR_RG_Imediatas_2024_simplified.rds
+
+# Local output folders can be regenerated
+results/
+
+# OS files
+Thumbs.db
+.DS_Store
